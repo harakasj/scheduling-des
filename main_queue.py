@@ -39,116 +39,15 @@ MAX_PROC = 1000
 STOP_SIG = 1000
 
 
-def plot_and_save():
-    import matplotlib
-    matplotlib.use('Qt5Agg')
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
-    fname = "Multi3.pdf"
-    with PdfPages(fname) as pdf:
-        plt.figure()
-        plt.hist(Record.q_size,
-                 histtype='bar',
-                 bins=20,
-                 normed=1)
-        plt.title("Queue Size (norm) (TQ = %d, $\lambda=1/8$, jobs= %d)"
-                  % (TIME_QUANTUM, len(Record.jobs_completed)))
-        # plt.show()
-        plt.ylim(0, .3)
-        plt.xlim(0, 20)
-        # plt.axis([0,125,0,300])
-        pdf.savefig()
-        plt.figure()
-        plt.hist(list(x.trnd_t for x in Record.jobs_completed),
-                 histtype='bar',
-                 bins=40,
-                 normed=0)
-        plt.axis([0, 100, 0, 200])
-        plt.title("Turnaround Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
-                  % (TIME_QUANTUM, len(Record.jobs_completed)))
-        # plt.show()
-        pdf.savefig()
-        plt.figure(figsize=(8, 3))
-        plt.step(Record.q_time,
-                 Record.q_size,
-                 where="mid",
-                 label="Queue Size")
-        plt.legend()
-        # plt.axis([0,125,0,300])
-        plt.title("Queue Size vs Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
-                  % (TIME_QUANTUM, len(Record.jobs_completed)))
-
-        pdf.savefig()
-        plt.show()
-        plt.close()
-        #
-        # fname = "TQ-%d-queue.pdf" % TIME_QUANTUM
-        # with PdfPages(fname) as pdf:
-        #     plt.figure()
-        #     plt.hist(Record.q_size,
-        #              histtype='bar',
-        #              bins=20,
-        #              normed=1)
-        #     plt.title("Queue Size (norm) (TQ = %d, $\lambda=1/8$, runtime= %d)"
-        #               % (TIME_QUANTUM,SIM_TIME))
-        #     # plt.show()
-        #     plt.ylim(0,.3)
-        #     plt.xlim(0,20)
-        #     # plt.axis([0,125,0,300])
-        #     pdf.savefig()
-        #     plt.close()
-        #
-        # fname = "TQ-%d-trnd.pdf" % TIME_QUANTUM
-        # with PdfPages(fname) as pdf:
-        #     plt.figure()
-        #     plt.hist(list(x.trnd_t for x in Record.jobs_completed),
-        #              histtype='bar',
-        #              bins=40,
-        #              normed=0)
-        #     plt.axis([0,125,0,200])
-        #     plt.title("Turnaround Time (TQ = %d, $\lambda=1/8$, runtime= %d)"
-        #               % (TIME_QUANTUM,SIM_TIME))
-        #     # plt.show()
-        #     pdf.savefig()
-        #     plt.close()
-        #
-        # fname = "TQ-%d-Wait.pdf" % TIME_QUANTUM
-        # with PdfPages(fname) as pdf:
-        #     plt.figure()
-        #     plt.hist(list(x.wait_t for x in Record.jobs_completed),
-        #              histtype='bar',
-        #              bins=40,
-        #              normed=0)
-        #     plt.axis([0,125,0,200])
-        #     plt.title("Wait Time (TQ = %d, $\lambda=1/8$, runtime= %d)"
-        #               % (TIME_QUANTUM,SIM_TIME))
-        #     # plt.show()
-        #     pdf.savefig()
-        #     plt.close()
-        #
-        # fname = "TQ-%d-Queue-vs-time.pdf" % TIME_QUANTUM
-        # with PdfPages(fname) as pdf:
-        #     plt.figure(figsize=(8, 3))
-        #     plt.step(Record.q_time,
-        #              Record.q_size,
-        #              where="mid",
-        #              label="Queue Size")
-        #     plt.legend()
-        #     # plt.axis([0,125,0,300])
-        #     plt.title("Queue Size vs Time (TQ = %d, $\lambda=1/8$, runtime= %d)"
-        #               % (TIME_QUANTUM, SIM_TIME))
-        #     # plt.show()
-        #     pdf.savefig()
-        #     plt.close()
-
-
-def plots():
+def plots(fmt='png'):
     # Do the plotting
     try:
         import matplotlib
         matplotlib.use('Qt5Agg')
         import matplotlib.pyplot as plt
         from scipy import stats
+
+        path = 'figures/'
 
         plt.figure()
         plt.hist(Record.q_size,
@@ -158,6 +57,8 @@ def plots():
         plt.axis([0, 15, 0, 0.3])
         plt.title("Queue Size (Normalized) (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (TIME_QUANTUM, len(Record.jobs_completed)))
+        fname = "TQ-%d-Queue-Size.%s" % (TIME_QUANTUM, fmt)
+        plt.savefig(path+fname, format=fmt)
 
         plt.figure()
         print(len(Record.jobs_completed))
@@ -168,6 +69,8 @@ def plots():
         plt.title("Wait Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (TIME_QUANTUM, len(Record.jobs_completed)))
         plt.axis([0, 100, 0, 250])
+        fname = "TQ-%d-Wait-Time.%s" % (TIME_QUANTUM, fmt)
+        plt.savefig(path+fname, format=fmt)
 
         plt.figure()
         plt.hist(list(x.wait_t for x in Record.jobs_completed),
@@ -177,6 +80,8 @@ def plots():
         plt.title("Turnaround Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (TIME_QUANTUM, len(Record.jobs_completed)))
         plt.axis([0, 100, 0, 250])
+        fname = "TQ-%d-Trnd-Time.%s" % (TIME_QUANTUM, fmt)
+        plt.savefig(path+fname, format=fmt)
 
         plt.figure()
         plt.step(Record.q_time,
@@ -193,6 +98,7 @@ def plots():
         plt.show()
     except ImportError as i:
         print("Missing %s" % i)
+
 
 def convolve(x, N):
     # Just a helper function, to compute a moving average
@@ -504,6 +410,7 @@ def timed_run(env):
     env.run(until=SIM_TIME)
     plots()
 
+
 def main():
     # TODO: argsparse
     random.seed(RAND_SEED)
@@ -518,7 +425,7 @@ def main():
     # a = (convolve(Record.total_burst,N))
     # qApp = QtWidgets.QApplication(sys.argv)
     # aw = ApplicationWindow(data1=Record.q_size, data2=convolve(Record.trnd_t, 8))
-    # aw.setWindowTitle("%s" % progname)
+    # aw.setWindowTitle("%s" % DES)
     # aw.show()
     # sys.exit(qApp.exec_())
 
