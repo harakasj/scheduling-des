@@ -14,7 +14,7 @@ which whas introduced in Python 3.6. Otherwise, it should run
 on < Python 3. Just modify or remove print formats with f-literals.
 
 """
-
+import argparse
 import pickle
 import simpy
 import time
@@ -23,8 +23,8 @@ from random import randint, expovariate
 import numpy as np
 from array import array
 from PlotQt import *
-
 from numpy.core.fromnumeric import mean
+from collections import namedtuple
 
 # Default parameters
 RAND_SEED = 50  # rand seed to reproduce
@@ -37,6 +37,15 @@ INTER_T = (1 / 8)  # 1 arrival every 8 seconds
 SIM_TIME = 20000
 MAX_PROC = 1000
 STOP_SIG = 1000
+#
+#
+# class Args(argparse.Namespace):
+#     pass
+# # main(args.runtime, args.quantum, args.jobs, args.test, args.plot)
+# def parse():
+#     Opt = namedtuple('arg','runtime quantum jobs test plot')
+#     args = parser.parse_args()
+#     return Opt(**vars(args))
 
 
 def plots(fmt='png'):
@@ -46,9 +55,7 @@ def plots(fmt='png'):
         matplotlib.use('Qt5Agg')
         import matplotlib.pyplot as plt
         from scipy import stats
-
         path = 'figures/'
-
         plt.figure()
         plt.hist(Record.q_size,
                  histtype='bar',
@@ -121,7 +128,6 @@ def summary(dt):
     print('Queue size at finish: %d' % Record.q_size[-1])
     print("\n{0:<10s} {1:<10s} {2:<10s} {3:<10s} {4:<10s} {5:<10s} {6:<10s}"
           .format("job", "arrive", "service", "init wait", "finish", "wait", "turnaround"))
-
     print(*(x.__str__(True) for x in sorted(Record.jobs_completed,
                                             key=lambda k: k.arrive_t)), sep='\n')
     print('======================================'
@@ -284,7 +290,7 @@ class CPU(simpy.Resource):
             print("{0:<8d} {1:<9s}".format(int(env.now), str(pid)), end='')
             print(i.cause, end='')
             print('{0:>13s} {1:<10.0f}'.format('remain =', pid.remain_t))
-            Record.total_t -= TIME_QUANTUM
+            Record.total_t -= self.quantum
         # Some record-keeping
         Record.total_burst.append(Record.total_t)
         Record.mean_burst.append(self.check_queue())
@@ -314,13 +320,13 @@ def job_sched(env, proc, cpu):
         if proc.remain_t == proc.service_t:
             proc.initial_wait = env.now - proc.arrive_t
         # Print out queue size at every step.
-        print("{0:<8d} Queued:{1:<8d}".format(int(env.now), len(cpu.waiting)))
-        print("{0:<8d} {1:<8s} {2:<8s} {3:<8s} {4:<8.0f} "
-              .format(int(env.now), str(proc), "start", "remain =", proc.remain_t))
+        # print("{0:<8d} Queued:{1:<8d}".format(int(env.now), len(cpu.waiting)))
+        print(f'{int(env.now):<8d} {str(proc):<8s} '
+              f'{"start":<8s} {"remain =":<8s} {proc.remain_t:<8.0f} ')
 
         # run until job finishes or quantum expires
         terminated = env.process(cpu.do_job(env, proc))
-        quantum_exp = env.timeout(TIME_QUANTUM)
+        quantum_exp = env.timeout(cpu.quantum)
 
         # Whichever is triggered first
         yield terminated | quantum_exp
@@ -328,7 +334,7 @@ def job_sched(env, proc, cpu):
         if not terminated.triggered:
             terminated.interrupt("stop")
             # Decrement the job's remaining time
-            proc.remain_t -= TIME_QUANTUM
+            proc.remain_t -= cpu.quantum
             # Take it out of the wait queue -> reschedule it
             cpu.waiting.remove(proc)
             env.process(job_sched(env, proc, cpu))
@@ -357,11 +363,11 @@ def job_sched(env, proc, cpu):
 
 
 # ------------------ Initializes the simulation --------------------------------
-def init_sim(env, rand=expovariate, *args):
-    cpu = CPU(TIME_QUANTUM, env, NUM_CORES, )
+def init_sim(env, arg, rand=expovariate):
+    cpu = CPU(arg.quantum, env, NUM_CORES, )
     i = 0
     while True:
-        if Record.run_test is True:
+        if arg.test:
             try:
                 # Pop the next arrival time
                 next_arrive = Record.arrive_times.pop(0)
@@ -371,18 +377,15 @@ def init_sim(env, rand=expovariate, *args):
             except IndexError:
                 env.exit()
         else:
-            if i == MAX_PROC:
+            if i == arg.jobs:
                 env.exit()
             yield env.timeout(int(rand(INTER_T)))
 
         i += 1  # Increment the pid number
         proc = Job(pid="pid %d" % i, arrive_t=env.now, env=env)
-
         env.proc_data.append(proc)  # for logging
-
         print("{0:<8d} {1:<8s} {2:<8s} {3:<8s} {4:<8.0f} ".format(
             int(proc.arrive_t), str(proc), "arrive", "service time =", proc.service_t))
-
         # Keeps track of the total service time of the queue
         Record.total_t += proc.service_t
         # throws the job into the waiting queue
@@ -393,33 +396,27 @@ def init_sim(env, rand=expovariate, *args):
 # ------------------------ End Initialization ----------------------------------
 
 
-def test_run(env):
-    # This sets the test case parameters
-    Record.run_test = True
-    Record.arrive_times = [0, 10, 15, 80, 90]
-    Record.service_times = [75, 40, 25, 20, 45]
-    t = time.process_time()
-    env.process(init_sim(env))
-    env.run(until=SIM_TIME)
-    dt = time.process_time() - t
-    summary(dt)
-
-
-def timed_run(env):
-    env.process(init_sim(env))
-    env.run(until=SIM_TIME)
-    plots()
-
-
-def main():
+def main(arg):
     # TODO: argsparse
     random.seed(RAND_SEED)
     # Create the Environment() object
     env = Env()
     print('\nStarting.\n')
-    # test_run(env)
-    timed_run(env)
-
+    if arg.test is True:
+        Record.arrive_times = [0, 10, 15, 80, 90]
+        Record.service_times = [75, 40, 25, 20, 45]
+        t = time.process_time()
+        env.process(init_sim(env,arg))
+        env.run(until=arg.runtime)
+        dt = time.process_time() - t
+        summary(dt)
+    else:
+        # timed_run(env, runtime=runtime, num_jobs=num_jobs)
+        env.process(init_sim(env, arg))
+        env.run(until=arg.runtime)
+        if args.plot:
+            plots()
+    return
     # Uncomment to launch animated plot Qt5 GUI
     # N = 0
     # a = (convolve(Record.total_burst,N))
@@ -430,4 +427,26 @@ def main():
     # sys.exit(qApp.exec_())
 
 if __name__ == "__main__":
-    main()
+    """
+    Using a named tuple to hold optional arguments due to laziness. 
+    That way, all arguments can be passed and referenced as if it
+    were a class attribute. i.e arg.jobs, arg.runtime
+    """
+    Arguments = namedtuple('arg', 'runtime quantum jobs test plot')
+    parser = argparse.ArgumentParser(
+                        description='round-robin scheduling simulation.')
+    parser.add_argument('-r', '--runtime', type=int, default=SIM_TIME,
+                        help='runtime: default = %s' % SIM_TIME)
+    parser.add_argument('-q', '--quantum', type=int, default=TIME_QUANTUM,
+                        help='time quantum: default = %s' % TIME_QUANTUM)
+    parser.add_argument('-j', '--jobs', type=int, default=MAX_PROC,
+                        help='number of jobs: default = %s' % MAX_PROC)
+    parser.add_argument('-t', '--test', type=bool, default=False,
+                        help='run test case: default = False')
+    parser.add_argument('-p', '--plot', type=bool, default=False,
+                        help='enable plotting: default = False')
+
+    args = parser.parse_args()
+    main(Arguments(**vars(args)))
+
+    # main(args.runtime, args.quantum, args.jobs, args.test, args.plot)
