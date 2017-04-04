@@ -37,19 +37,13 @@ INTER_T = (1 / 8)  # 1 arrival every 8 seconds
 SIM_TIME = 20000
 MAX_PROC = 1000
 STOP_SIG = 1000
-#
-#
-# class Args(argparse.Namespace):
-#     pass
-# # main(args.runtime, args.quantum, args.jobs, args.test, args.plot)
-# def parse():
-#     Opt = namedtuple('arg','runtime quantum jobs test plot')
-#     args = parser.parse_args()
-#     return Opt(**vars(args))
 
 
-def plots(fmt='png'):
+def plots(arg,fmt='png'):
     # Do the plotting
+    # TODO: queue size sample rate depends on quantum size
+    #       quantum of 1 has way more records than quantum of 5
+    #       so normalize to account for unequal sample sizes.
     try:
         import matplotlib
         matplotlib.use('Qt5Agg')
@@ -64,8 +58,8 @@ def plots(fmt='png'):
         plt.axis([0, 15, 0, 0.3])
         plt.title("Queue Size (Normalized) (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (TIME_QUANTUM, len(Record.jobs_completed)))
-        fname = "TQ-%d-Queue-Size.%s" % (TIME_QUANTUM, fmt)
-        plt.savefig(path+fname, format=fmt)
+        fname = "TQ-%d-Queue-Size.%s" % (arg.quantum, fmt)
+        plt.savefig(path + fname, format=fmt)
 
         plt.figure()
         print(len(Record.jobs_completed))
@@ -76,8 +70,8 @@ def plots(fmt='png'):
         plt.title("Wait Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (TIME_QUANTUM, len(Record.jobs_completed)))
         plt.axis([0, 100, 0, 250])
-        fname = "TQ-%d-Wait-Time.%s" % (TIME_QUANTUM, fmt)
-        plt.savefig(path+fname, format=fmt)
+        fname = "TQ-%d-Wait-Time.%s" % (arg.quantum, fmt)
+        plt.savefig(path + fname, format=fmt)
 
         plt.figure()
         plt.hist(list(x.wait_t for x in Record.jobs_completed),
@@ -87,8 +81,8 @@ def plots(fmt='png'):
         plt.title("Turnaround Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (TIME_QUANTUM, len(Record.jobs_completed)))
         plt.axis([0, 100, 0, 250])
-        fname = "TQ-%d-Trnd-Time.%s" % (TIME_QUANTUM, fmt)
-        plt.savefig(path+fname, format=fmt)
+        fname = "TQ-%d-Trnd-Time.%s" % (arg.quantum, fmt)
+        plt.savefig(path + fname, format=fmt)
 
         plt.figure()
         plt.step(Record.q_time,
@@ -101,31 +95,31 @@ def plots(fmt='png'):
                  where="mid",
                  label="Queue Size")
         plt.title("Queue Size vs Time (TQ = %d, $\lambda=1/8$, runtime= %d)"
-                  % (TIME_QUANTUM, MAX_PROC))
+                  % (arg.quantum, arg.jobs))
         plt.show()
     except ImportError as i:
         print("Missing %s" % i)
 
 
 def convolve(x, N):
-    # Just a helper function, to compute a moving average
+    # helper function, to compute a moving average
     cumsum = np.cumsum(np.insert(x, 0, 0))
     m = np.append(np.zeros(N), (cumsum[N:] - cumsum[:-N]) / N)
     return array("d", m)
 
 
-def summary(dt):
-    # Print out your summary data
-    avg = lambda x: sum(x) / len(x)
+def summary(dt,arg):  # Print out your summary data
+    # PEP 8, no more lambda assignment, use inline def?
+    def avg(x): return sum(x) / len(x)
     print("\n================================= "
           "Summary "
           "===================================\n")
     print("Time elapsed:", dt)
-    print("Quantum: %d" % TIME_QUANTUM)
-    print("Context Switch: %d" % CONTEXT_SWITCH)
+    print("Quantum: %d" % arg.quantum)
+    print("Context Switch: %d" % arg.context)
     print('Mean turnaround: %1.2f' % avg(list(x.trnd_t for x in Record.jobs_completed)))
     print('Mean wait time: %1.2f' % avg(list(x.wait_t for x in Record.jobs_completed)))
-    print('Queue size at finish: %d' % Record.q_size[-1])
+    print('Queue size at finish: %d' % (Record.q_size[-1]-1)) # bug, queue ending with +1 item
     print("\n{0:<10s} {1:<10s} {2:<10s} {3:<10s} {4:<10s} {5:<10s} {6:<10s}"
           .format("job", "arrive", "service", "init wait", "finish", "wait", "turnaround"))
     print(*(x.__str__(True) for x in sorted(Record.jobs_completed,
@@ -181,14 +175,11 @@ class Env(simpy.Environment):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.proc_data = []
-        # self.StopSimulation = simpy.core.StopSimulation(0)
-        # self.StopSimulation.
 
     def setup(self):
         pass
 
     def exit(self, value=None):
-        self.save_record()
         return super().exit(value)
 
     def show_queue(self):
@@ -214,7 +205,6 @@ class Job(simpy.events.Event):
     Most of this class is just keeping track of specific 
     information like arrival time, turnaround time, wait time, etc..
     """
-
     def __init__(self, pid, arrive_t, env, rand=randint):
         # If test info is being used, initialize that first
         super().__init__(env)
@@ -238,17 +228,8 @@ class Job(simpy.events.Event):
         self.wait_t = self.trnd_t - self.service_t
         return self.trnd_t, self.wait_t
 
-    def _desc(self):
-        return simpy.events.Event._desc(self)
-
     def trigger(self, event):
         return simpy.events.Event.trigger(self, event)
-
-    def succeed(self, value=None):
-        return simpy.events.Event.succeed(self, value)
-
-    def fail(self, exception):
-        return simpy.events.Event.fail(self, exception)
 
     def __repr__(self):
         return simpy.events.Event.__repr__(self)
@@ -265,12 +246,13 @@ class Job(simpy.events.Event):
 class CPU(simpy.Resource):
     # This is an inherited from a generic base class.
     # The CPU is treated as the primary resource
-    def __init__(self, quantum, *args, **kwargs):
+    def __init__(self, quantum,context, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.env = args
         self.data = []
         self.waiting = []
         self.quantum = quantum
+        self.context = context
 
     def request(self, pid, *args, **kwargs):
         if pid:
@@ -281,8 +263,7 @@ class CPU(simpy.Resource):
         return super().release(*args, **kwargs)
 
     def do_job(self, env, pid):
-        # Run out the clock
-        # Either the job completes or is interrupted
+        # Either the job completes or is interrupted by a timeout
         try:
             yield env.timeout(pid.remain_t)
             Record.total_t -= pid.remain_t
@@ -327,7 +308,6 @@ def job_sched(env, proc, cpu):
         # run until job finishes or quantum expires
         terminated = env.process(cpu.do_job(env, proc))
         quantum_exp = env.timeout(cpu.quantum)
-
         # Whichever is triggered first
         yield terminated | quantum_exp
         # If the job didn't finish, the time quantum expired
@@ -348,23 +328,19 @@ def job_sched(env, proc, cpu):
             Record.jobs_completed.append(proc)
             # Remove the completed job from the waiting queue
             cpu.waiting.remove(proc)
-
             # ---- Terminate at the Nth job ----
             if str(STOP_SIG) in proc.id:
-                print("\n Simulation stopped.\n Remaining jobs: %d" % len(cpu.waiting))
-                env.save_record()
+                print("\nSimulation stopped.\nRemaining jobs: %d" % len(cpu.waiting))
                 raise simpy.core.StopSimulation(0)
-
         # execute a context switch (in this case its 0, so does nothing)
         yield env.timeout(CONTEXT_SWITCH)
-        if CONTEXT_SWITCH > 0:
+        if cpu.context > 0:
             print("{0:<8d} context switch".format(int(env.now)))
-            # print("{0:<8d} total time {1:<8d} ".format(int(env.now), Record.total_t))
 
 
 # ------------------ Initializes the simulation --------------------------------
 def init_sim(env, arg, rand=expovariate):
-    cpu = CPU(arg.quantum, env, NUM_CORES, )
+    cpu = CPU(arg.quantum, arg.context, env, NUM_CORES, )
     i = 0
     while True:
         if arg.test:
@@ -386,18 +362,14 @@ def init_sim(env, arg, rand=expovariate):
         env.proc_data.append(proc)  # for logging
         print("{0:<8d} {1:<8s} {2:<8s} {3:<8s} {4:<8.0f} ".format(
             int(proc.arrive_t), str(proc), "arrive", "service time =", proc.service_t))
-        # Keeps track of the total service time of the queue
         Record.total_t += proc.service_t
         # throws the job into the waiting queue
         env.process(job_sched(env, proc, cpu))
-        # print("{0:<8d} total time {1:<8d} ".format(int(env.now), Record.total_t))
 
 # ------------------------------------------------------------------------------
 # ------------------------ End Initialization ----------------------------------
 
-
 def main(arg):
-    # TODO: argsparse
     random.seed(RAND_SEED)
     # Create the Environment() object
     env = Env()
@@ -406,25 +378,32 @@ def main(arg):
         Record.arrive_times = [0, 10, 15, 80, 90]
         Record.service_times = [75, 40, 25, 20, 45]
         t = time.process_time()
-        env.process(init_sim(env,arg))
-        env.run(until=arg.runtime)
-        dt = time.process_time() - t
-        summary(dt)
-    else:
-        # timed_run(env, runtime=runtime, num_jobs=num_jobs)
         env.process(init_sim(env, arg))
         env.run(until=arg.runtime)
-        if args.plot:
-            plots()
+        env.save_record()
+        dt = time.process_time() - t
+        summary(dt,arg)
+    else:
+        t = time.process_time()
+        env.process(init_sim(env, arg))
+        env.run(until=arg.runtime)
+        env.save_record()
+        dt = time.process_time() - t
+        print("Time elapsed:", dt)
+        if arg.plot:
+            plots(arg)
+
+    if arg.qt5:
+        # launch animated plot Qt5 GUI
+        N = 0
+        a = (convolve(Record.total_burst,N))
+        qApp = QtWidgets.QApplication(sys.argv)
+        aw = ApplicationWindow(data1=Record.q_size, data2=convolve(Record.trnd_t, 8))
+        aw.setWindowTitle("%s" % 'rr plot')
+        aw.show()
+        sys.exit(qApp.exec_())
     return
-    # Uncomment to launch animated plot Qt5 GUI
-    # N = 0
-    # a = (convolve(Record.total_burst,N))
-    # qApp = QtWidgets.QApplication(sys.argv)
-    # aw = ApplicationWindow(data1=Record.q_size, data2=convolve(Record.trnd_t, 8))
-    # aw.setWindowTitle("%s" % DES)
-    # aw.show()
-    # sys.exit(qApp.exec_())
+
 
 if __name__ == "__main__":
     """
@@ -432,9 +411,9 @@ if __name__ == "__main__":
     That way, all arguments can be passed and referenced as if it
     were a class attribute. i.e arg.jobs, arg.runtime
     """
-    Arguments = namedtuple('arg', 'runtime quantum jobs test plot')
+    Arguments = namedtuple('arg', 'runtime quantum context jobs test plot ext qt5')
     parser = argparse.ArgumentParser(
-                        description='round-robin scheduling simulation.')
+        description='round-robin scheduling simulation.')
     parser.add_argument('-r', '--runtime', type=int, default=SIM_TIME,
                         help='runtime: default = %s' % SIM_TIME)
     parser.add_argument('-q', '--quantum', type=int, default=TIME_QUANTUM,
@@ -445,8 +424,14 @@ if __name__ == "__main__":
                         help='run test case: default = False')
     parser.add_argument('-p', '--plot', type=bool, default=False,
                         help='enable plotting: default = False')
+    parser.add_argument('-c', '--context', type=int, default=CONTEXT_SWITCH,
+                        help='context switch: default = %s' % CONTEXT_SWITCH)
+    parser.add_argument('-e', '--ext', type=bool, default='.png',
+                        help='save plot format: default = png')
+    parser.add_argument('-qt', '--qt5', type=bool, default=False,
+                        help='qt5 animated plotting: default = %s' % False)
 
-    args = parser.parse_args()
-    main(Arguments(**vars(args)))
+    a = parser.parse_args()
+    main(Arguments(**vars(a)))
 
     # main(args.runtime, args.quantum, args.jobs, args.test, args.plot)
