@@ -1,10 +1,10 @@
 """
-RR scheduling sim for single-core cpu
+RR scheduling sim for single-core (or multi) cpu
 Requires: Python 3.6
 Dependencies: simpy, numpy, 
 Optional dep: scipy, pyqt5, matplotlib 2.0
 
-Check SimPy domcumentation:
+Check SimPy domcumentation to better understand how the sim works:
 https://media.readthedocs.org/pdf/simpy/latest/simpy.pdf
 
 If no plotting, only simpy and numpy are required
@@ -13,7 +13,28 @@ Only string formatting using f-literals is a compatability issue
 which whas introduced in Python 3.6. Otherwise, it should run 
 on < Python 3. Just modify or remove print formats with f-literals.
 
+---- How it works (basically) -----: 
+main() creates the simulation environment env(), then passes it to init_sim()
+
+init_sim() creates the CPU() Resource and generates Job() events and 
+sends them to job_proc()
+
+job_proc() runs the events. When/if the quantum expires, the job is 
+appended to the back of the queue.
+
+---- Other stuff ----
+Check the optional arguments for other things.
+
+The Record object records the simulation state, for later analysis
+- its a mess right now. But it works.
+
+---- Future ----
+allow for preemption
+better state recording
+better plotting params
+
 """
+
 import argparse
 import pickle
 import simpy
@@ -39,52 +60,44 @@ MAX_PROC = 1000
 STOP_SIG = 1000
 
 
-def plots(arg,fmt='png'):
-    # Do the plotting
-    # TODO: queue size sample rate depends on quantum size
-    #       quantum of 1 has way more records than quantum of 5
-    #       so normalize to account for unequal sample sizes.
+def plots(arg):
     try:
         import matplotlib
         matplotlib.use('Qt5Agg')
         import matplotlib.pyplot as plt
         from scipy import stats
         path = 'figures/'
-        plt.figure()
-        plt.hist(Record.q_size,
+        plt.close('all')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        f, (ax1, ax2, ax3) = plt.subplots(3, figsize=(10, 15))
+        f.tight_layout(pad=2, h_pad=1.0)
+        ax1.hist(Record.q_size,
                  histtype='bar',
                  bins=18,
                  normed=1)
-        plt.axis([0, 15, 0, 0.3])
-        plt.title("Queue Size (Normalized) (TQ = %d, $\lambda=1/8$, jobs= %d)"
-                  % (TIME_QUANTUM, len(Record.jobs_completed)))
-        fname = "TQ-%d-Queue-Size.%s" % (arg.quantum, fmt)
-        plt.savefig(path + fname, format=fmt)
-
-        plt.figure()
-        print(len(Record.jobs_completed))
-        plt.hist(list(x.trnd_t for x in Record.jobs_completed),
+        ax1.axis([0, 15, 0, 0.3])
+        ax1.set_title("Queue Size (Normalized) (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, len(Record.jobs_completed)))
+        ax2.hist(list(x.trnd_t for x in Record.jobs_completed),
                  histtype='bar',
                  bins="auto",
                  normed=0)
-        plt.title("Wait Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
-                  % (TIME_QUANTUM, len(Record.jobs_completed)))
-        plt.axis([0, 100, 0, 250])
-        fname = "TQ-%d-Wait-Time.%s" % (arg.quantum, fmt)
-        plt.savefig(path + fname, format=fmt)
-
-        plt.figure()
-        plt.hist(list(x.wait_t for x in Record.jobs_completed),
+        ax2.set_title("Wait Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, len(Record.jobs_completed)))
+        ax2.axis([0, 100, 0, 250])
+        ax3.hist(list(x.wait_t for x in Record.jobs_completed),
                  histtype='bar',
                  bins="auto",
                  normed=0)
-        plt.title("Turnaround Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
-                  % (TIME_QUANTUM, len(Record.jobs_completed)))
-        plt.axis([0, 100, 0, 250])
-        fname = "TQ-%d-Trnd-Time.%s" % (arg.quantum, fmt)
-        plt.savefig(path + fname, format=fmt)
+        ax3.set_title("Turnaround Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, len(Record.jobs_completed)))
+        ax3.axis([0, 100, 0, 250])
+        f.subplots_adjust(hspace=0.2)
+        fname = "TQ-%d.%s" % (arg.quantum, arg.ext)
+        f.savefig(path + fname, format=arg.ext)
 
-        plt.figure()
+        plt.figure(figsize=(15, 10))
         plt.step(Record.q_time,
                  stats.zscore(Record.mean_burst),
                  where="mid",
@@ -94,8 +107,12 @@ def plots(arg,fmt='png'):
                  stats.zscore(Record.q_size),
                  where="mid",
                  label="Queue Size")
-        plt.title("Queue Size vs Time (TQ = %d, $\lambda=1/8$, runtime= %d)"
+        plt.title("Queue Size vs Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
                   % (arg.quantum, arg.jobs))
+        plt.legend()
+
+        fname = "TQ-%d-Time-Series.%s" % (arg.quantum, arg.ext)
+        plt.savefig(path + fname, format=arg.ext)
         plt.show()
     except ImportError as i:
         print("Missing %s" % i)
@@ -172,6 +189,9 @@ class Record:
 
 
 class Env(simpy.Environment):
+    """
+    This is the environment in which the simulation is "contained"
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.proc_data = []
@@ -193,8 +213,11 @@ class Env(simpy.Environment):
 
     @staticmethod
     def save_record():
-        print("Writing record...")
-        pickle.dump(Record, open("bin/Record.p", "wb"))
+        filepath = 'bin/Record.p'
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        print('Writing record to %s' % filepath)
+        pickle.dump(Record, open(filepath, 'wb'))
+        return
 
 
 class Job(simpy.events.Event):
@@ -208,7 +231,7 @@ class Job(simpy.events.Event):
     def __init__(self, pid, arrive_t, env, rand=randint):
         # If test info is being used, initialize that first
         super().__init__(env)
-        if Record.run_test is True and len(Record.service_times) > 0:
+        if len(Record.service_times) > 0:
             self.service_t = Record.service_times.pop(0)
         else:
             # Otherwise, its going to be a random service time
@@ -293,7 +316,9 @@ class CPU(simpy.Resource):
     def _do_get(self, event):
         return simpy.Resource._do_get(self, event)
 
-
+# ------------------------------------------------------------------------------
+# --------------------------- Schedules jobs -----------------------------------
+# ------------------------------------------------------------------------------
 def job_sched(env, proc, cpu):
     with cpu.request(pid=proc) as request:
         yield request
@@ -323,7 +348,6 @@ def job_sched(env, proc, cpu):
             print(f'{int(env.now):<8d} {str(proc):<8s} '
                   f'{"finish":<8s} {"trnd time =":<8s} {proc.trnd_t:<8.0f} '
                   f'{"wait time =":<8s} {proc.wait_t:<8.0f} ')
-
             # For record-keeping, appends all completed jobs to a list
             Record.jobs_completed.append(proc)
             # Remove the completed job from the waiting queue
@@ -333,12 +357,13 @@ def job_sched(env, proc, cpu):
                 print("\nSimulation stopped.\nRemaining jobs: %d" % len(cpu.waiting))
                 raise simpy.core.StopSimulation(0)
         # execute a context switch (in this case its 0, so does nothing)
-        yield env.timeout(CONTEXT_SWITCH)
+        yield env.timeout(cpu.context)
         if cpu.context > 0:
             print("{0:<8d} context switch".format(int(env.now)))
 
-
+# ------------------------------------------------------------------------------
 # ------------------ Initializes the simulation --------------------------------
+# ------------------------------------------------------------------------------
 def init_sim(env, arg, rand=expovariate):
     cpu = CPU(arg.quantum, arg.context, env, NUM_CORES, )
     i = 0
@@ -366,8 +391,9 @@ def init_sim(env, arg, rand=expovariate):
         # throws the job into the waiting queue
         env.process(job_sched(env, proc, cpu))
 
-# ------------------------------------------------------------------------------
 # ------------------------ End Initialization ----------------------------------
+# ------------------------------------------------------------------------------
+
 
 def main(arg):
     random.seed(RAND_SEED)
@@ -418,20 +444,18 @@ if __name__ == "__main__":
                         help='runtime: default = %s' % SIM_TIME)
     parser.add_argument('-q', '--quantum', type=int, default=TIME_QUANTUM,
                         help='time quantum: default = %s' % TIME_QUANTUM)
+    parser.add_argument('-c', '--context', type=int, default=CONTEXT_SWITCH,
+                        help='context switch: default = %s' % CONTEXT_SWITCH)
     parser.add_argument('-j', '--jobs', type=int, default=MAX_PROC,
                         help='number of jobs: default = %s' % MAX_PROC)
     parser.add_argument('-t', '--test', type=bool, default=False,
                         help='run test case: default = False')
     parser.add_argument('-p', '--plot', type=bool, default=False,
                         help='enable plotting: default = False')
-    parser.add_argument('-c', '--context', type=int, default=CONTEXT_SWITCH,
-                        help='context switch: default = %s' % CONTEXT_SWITCH)
-    parser.add_argument('-e', '--ext', type=bool, default='.png',
+    parser.add_argument('-e', '--ext', type=str, default='svg',
                         help='save plot format: default = png')
     parser.add_argument('-qt', '--qt5', type=bool, default=False,
                         help='qt5 animated plotting: default = %s' % False)
 
     a = parser.parse_args()
     main(Arguments(**vars(a)))
-
-    # main(args.runtime, args.quantum, args.jobs, args.test, args.plot)
