@@ -1,3 +1,32 @@
+
+RR scheduling sim for single-core (or multi) cpu
+Requires: Python 3.6
+Dependencies: simpy, numpy, 
+Optional dep: scipy, pyqt5, matplotlib 2.0
+
+Check SimPy domcumentation to better understand how the sim works:
+https://media.readthedocs.org/pdf/simpy/latest/simpy.pdf
+
+If no plotting, only simpy and numpy are required
+
+Only string formatting using f-literals is a compatability issue 
+which whas introduced in Python 3.6. Otherwise, it should run 
+on < Python 3. Just modify or remove print formats with f-literals.
+
+---- How it works (basically) -----
+main() creates the simulation environment env(), then passes it to init_sim()
+
+init_sim() creates the CPU() Resource and generates Job() events and 
+sends them to job_proc()
+
+job_proc() runs the events. When/if the quantum expires, the job is 
+appended to the back of the queue.
+
+---- Other stuff ----
+Check the optional arguments for other things.
+
+The Record object records the simulation state, for later analysis
+- its a mess right now. But it works.
 Simulates RR scheduling. Have a decent amount of work to do on this to make it run smoother like fixing subclasses, callbacks, better data logging, etc... 
 
 I'd recommend checking out the [SimPy documentation](https://media.readthedocs.org/pdf/simpy/latest/simpy.pdf)

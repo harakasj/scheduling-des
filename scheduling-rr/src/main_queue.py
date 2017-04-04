@@ -118,6 +118,71 @@ def plots(arg):
         print("Missing %s" % i)
 
 
+def plots1(arg):
+    # Do the plotting
+    # TODO: queue size sample rate depends on quantum size
+    #       quantum of 1 has way more records than quantum of 5
+    #       so normalize to account for unequal sample sizes.
+    try:
+        import matplotlib
+        matplotlib.use('Qt5Agg')
+        import matplotlib.pyplot as plt
+        from scipy import stats
+        path = 'figures/'
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        plt.figure()
+        plt.hist(Record.q_size,
+                 histtype='bar',
+                 bins=18,
+                 normed=1)
+        plt.axis([0, 15, 0, 0.3])
+        plt.title("Queue Size (Normalized) (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, len(Record.jobs_completed)))
+        fname = "TQ-%d-Queue-Size.%s" % (arg.quantum, arg.ext)
+        plt.savefig(path + fname, format=arg.ext)
+        plt.figure()
+        plt.hist(list(x.trnd_t for x in Record.jobs_completed),
+                 histtype='bar',
+                 bins="auto",
+                 normed=0)
+        plt.title("Wait Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, len(Record.jobs_completed)))
+        plt.axis([0, 100, 0, 250])
+        fname = "TQ-%d-Wait-Time.%s" % (arg.quantum, arg.ext)
+        plt.savefig(path + fname, format=arg.ext)
+
+        plt.figure()
+        plt.hist(list(x.wait_t for x in Record.jobs_completed),
+                 histtype='bar',
+                 bins="auto",
+                 normed=0)
+        plt.title("Turnaround Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, len(Record.jobs_completed)))
+        plt.axis([0, 100, 0, 250])
+        fname = "TQ-%d-Trnd-Time.%s" % (arg.quantum, arg.ext)
+        plt.savefig(path + fname, format=arg.ext)
+
+        plt.figure()
+        plt.step(Record.q_time,
+                 stats.zscore(Record.mean_burst),
+                 where="mid",
+                 label="Average Service Time")
+
+        plt.step(Record.q_time,
+                 stats.zscore(Record.q_size),
+                 where="mid",
+                 label="Queue Size")
+        plt.title("Queue Size vs Time (TQ = %d, $\lambda=1/8$, jobs= %d)"
+                  % (arg.quantum, arg.jobs))
+        plt.legend()
+
+        fname = "TQ-%d-Time-Series.%s" % (arg.quantum, arg.ext)
+        plt.savefig(path + fname, format=arg.ext)
+        plt.show()
+    except ImportError as i:
+        print("Missing %s" % i)
+
+
 def convolve(x, N):
     # helper function, to compute a moving average
     cumsum = np.cumsum(np.insert(x, 0, 0))
@@ -189,9 +254,6 @@ class Record:
 
 
 class Env(simpy.Environment):
-    """
-    This is the environment in which the simulation is "contained"
-    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.proc_data = []
@@ -219,7 +281,6 @@ class Env(simpy.Environment):
         pickle.dump(Record, open(filepath, 'wb'))
         return
 
-
 class Job(simpy.events.Event):
     """
     The Job() class is the primary event, where each 
@@ -231,7 +292,7 @@ class Job(simpy.events.Event):
     def __init__(self, pid, arrive_t, env, rand=randint):
         # If test info is being used, initialize that first
         super().__init__(env)
-        if len(Record.service_times) > 0:
+        if Record.run_test is True and len(Record.service_times) > 0:
             self.service_t = Record.service_times.pop(0)
         else:
             # Otherwise, its going to be a random service time
@@ -452,7 +513,7 @@ if __name__ == "__main__":
                         help='run test case: default = False')
     parser.add_argument('-p', '--plot', type=bool, default=False,
                         help='enable plotting: default = False')
-    parser.add_argument('-e', '--ext', type=str, default='svg',
+    parser.add_argument('-e', '--ext', type=str, default='png',
                         help='save plot format: default = png')
     parser.add_argument('-qt', '--qt5', type=bool, default=False,
                         help='qt5 animated plotting: default = %s' % False)
